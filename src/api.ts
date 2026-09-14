@@ -83,7 +83,9 @@ export type AppData = {
 };
 const API_URL =
   import.meta.env.VITE_API_URL ||
-  `${window.location.protocol}//${window.location.hostname}:8000/api/v1`;
+  (import.meta.env.PROD
+    ? "/api/v1"
+    : `${window.location.protocol}//${window.location.hostname}:8000/api/v1`);
 const TOKEN_KEY = "yanwu_family_token";
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);

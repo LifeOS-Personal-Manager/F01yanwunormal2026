@@ -1,0 +1,5 @@
+apps/api
+database
+tests
+*.db
+.venv
