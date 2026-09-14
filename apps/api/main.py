@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, Date, DateTime, Integer, String, Text, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
+from sqlalchemy.pool import NullPool
 
 DB_PATH = Path(__file__).with_name("yanwu.db")
 database_url = os.getenv("DATABASE_URL", "").strip()
@@ -26,11 +27,13 @@ elif database_url.startswith("postgresql://"):
 if not database_url:
     database_url = f"sqlite:///{DB_PATH.as_posix()}"
 is_sqlite = database_url.startswith("sqlite:")
-engine = create_engine(
-    database_url,
-    connect_args={"check_same_thread": False} if is_sqlite else {},
-    pool_pre_ping=True,
-)
+engine_options = {
+    "connect_args": {"check_same_thread": False} if is_sqlite else {"prepare_threshold": None},
+    "pool_pre_ping": True,
+}
+if not is_sqlite:
+    engine_options["poolclass"] = NullPool
+engine = create_engine(database_url, **engine_options)
 SessionLocal = sessionmaker(engine, expire_on_commit=False)
 seed_examples = os.getenv("SEED_DEMO_DATA", "true" if is_sqlite else "false").lower() in {"1", "true", "yes"}
 
