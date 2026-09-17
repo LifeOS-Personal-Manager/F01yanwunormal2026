@@ -81,17 +81,13 @@ export type AppData = {
   followups: FollowUp[];
   goals: Goal[];
 };
-const API_URL =
-  import.meta.env.VITE_API_URL ||
-  (import.meta.env.PROD
-    ? "/api/v1"
-    : `${window.location.protocol}//${window.location.hostname}:8000/api/v1`);
+const API_URL = import.meta.env.VITE_API_URL || "/api";
 const TOKEN_KEY = "yanwu_family_token";
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  const response = await fetch(`${API_URL}/v1${path}`, { ...options, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
     throw new Error(body?.detail || `请求失败 (${response.status})`);
@@ -135,7 +131,7 @@ export const api = {
       ...json("POST", body),
       headers: {
         "Content-Type": "application/json",
-        "Idempotency-Key": crypto.randomUUID(),
+        "Idempotency-Key": typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : "record-" + Date.now() + "-" + Math.random().toString(36).slice(2),
       },
     }),
   updateRecord: (
