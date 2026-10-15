@@ -8,6 +8,7 @@ import {
   CircleUserRound,
   ClipboardList,
   Compass,
+  Eye,
   LayoutDashboard,
   Menu,
   MessageCircle,
@@ -36,6 +37,7 @@ import {
 import "./styles.css";
 import { AiSupport } from "./AiSupport";
 import { HomeworkAttachments } from "./HomeworkAttachments";
+import { HomeworkDetails } from "./HomeworkDetails";
 
 type View =
   | "home"
@@ -951,6 +953,8 @@ function LearningPage({
   updateStatus: (x: Homework, status: string) => void;
   ai?: (x: Homework) => void;
 }) {
+  const [detailId, setDetailId] = useState<string | null>(null);
+  const detail = items.find(x => x.id === detailId);
   const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
   const rows = useMemo(() => {
     const presetKeys = [
@@ -996,13 +1000,16 @@ function LearningPage({
       <div className="hw-content">
         <span className="tag">{x.type || "家庭作业"}</span>
         <b>{x.subject} · {x.content}</b>
-        {!!x.attachments?.length && <small>附件 {x.attachments.length} 个 · 编辑安排可查看</small>}
+        {!!x.attachments?.length && <small>附件 {x.attachments.length} 个</small>}
         <span>
           {x.due_label} · {x.support_mode}
           {x.check_required ? " · 需要检查" : ""}
         </span>
       </div>
       <div className="row-actions">
+        <button className="icon-action" title="查看安排" aria-label="查看安排" onClick={() => setDetailId(x.id)}>
+          <Eye size={15} />
+        </button>
         {ai && <button className="text-btn" onClick={() => ai(x)}>AI 建议</button>}
         <button className="icon-action" title="编辑" aria-label="编辑" onClick={() => editItem(x)}>
           <Pencil size={15} />
@@ -1027,6 +1034,7 @@ function LearningPage({
   );
   return (
     <div className="content">
+      {detail && <HomeworkDetails key={detail.id} item={detail} guardian={Boolean(ai)} onClose={() => setDetailId(null)} />}
       <PageHead
         hint="周期计划与单次事项"
         title="辅导支持"
@@ -1047,7 +1055,7 @@ function LearningPage({
       </div>
       {!!completedItems.length && (
         <details className="archive-panel schedule-archive">
-          <summary>历史完成 · {completedItems.length} 项</summary>
+          <summary>历史任务（已完成） · {completedItems.length} 项</summary>
           <div className="panel homework-panel">{completedItems.map(renderItem)}</div>
         </details>
       )}
@@ -1822,7 +1830,7 @@ function Editor({
             </button>
             <button className="btn primary" type="submit" disabled={saving || attachmentBusy}>
               <CheckCircle2 size={17} />
-              保存
+              {modal === "homework" ? (saving ? "正在保存…" : "保存安排") : "保存"}
             </button>
           </div>
         </form>
