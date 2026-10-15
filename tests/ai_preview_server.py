@@ -17,17 +17,15 @@ import uvicorn
 
 async def fake(snapshot):
     ids = [s['id'] for s in snapshot['sources']]
-    tutoring = None
     if len(ids) == 1 and ids[0].startswith('homework:'):
-        tutoring = dict(source_id=ids[0], task_summary='本地模拟：根据本次安排提供辅导路线', objectives=['理解要求，独立尝试'],
-                        plan=['准备材料2分钟', '孩子尝试10分钟', '提示与回顾5分钟'],
-                        solution_approach=['先明确要求，再分解步骤，最后检查'],
-                        parent_prompts=['你准备先做哪一步？'], self_check=['是否完成题目要求？'])
+        return ai_support.Result(facts=[], strengths=[], hypotheses=[], questions=[], suggestions=[dict(
+            goal='本次辅导建议', steps=['准备：一起读清要求，备好材料。\n思路：让孩子先独立尝试，卡住时用问题提示下一步。\n检查：请孩子复述思路，核对是否满足任务要求。'],
+            frequency='本次安排', review='完成后核对任务要求', source_ids=ids,
+        )])
     return ai_support.Result(
         facts=[{'text': '本地模拟：根据选中的记录整理事实。', 'source_ids': ids}],
         strengths=[], hypotheses=[], questions=['孩子希望获得什么帮助？'],
         suggestions=[dict(goal=f'本地模拟建议 {i+1}', steps=['和孩子一起选择一个小目标'], frequency='每天10分钟', review='一周后讨论感受', source_ids=ids) for i in range(3)],
-        tutoring=tutoring,
     )
 
 

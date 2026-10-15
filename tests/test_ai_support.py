@@ -36,7 +36,32 @@ class AIFlow(unittest.TestCase):
             hw = post('/homework', dict(subject='数学', content='练习', due_label='明天', support_mode='需要提示')).json()
             candidates = c.get('/api/v1/ai/candidates?days=7').json()['sources']
             self.assertTrue({key, 'homework:'+hw['id']} <= {x['id'] for x in candidates})
+            hw_key = 'homework:'+hw['id']
+            hw_preview = post('/ai/preview', {'sources': [hw_key]}).json()
+            brief_advice = dict(goal='本次辅导建议', steps=['准备：读清要求。\n思路：先让孩子尝试。\n检查：核对完成内容。'],
+                                frequency='本次安排', review='完成后核对任务要求', source_ids=[hw_key])
+            brief_result = ai_support.Result(facts=[], strengths=[], hypotheses=[], questions=[], suggestions=[brief_advice])
+            with patch.object(ai_support, 'call_model', AsyncMock(return_value=brief_result)):
+                generated = post('/ai/analyses', dict(sources=[hw_key], preview_hash=hw_preview['hash'], request_id='brief-homework'))
+            self.assertEqual(generated.status_code, 200, generated.text)
+            brief = generated.json()
+            self.assertEqual(len(brief['items']), 1)
+            brief_item = brief['items'][0]
+            self.assertEqual(brief_item['status'], 'pending')
+            edited_brief = {**brief_advice, 'steps': ['家长修改：先独立尝试，再核对题目要求。']}
+            saved = c.put('/api/v1/ai/suggestions/'+brief_item['id'], json=dict(version=1, status='accepted', advice=edited_brief))
+            self.assertEqual(saved.status_code, 200, saved.text)
+            self.assertEqual(saved.json()['items'][0]['status'], 'accepted')
+            self.assertEqual(saved.json()['result']['suggestions'][0]['steps'], brief_advice['steps'])
+            reopened = c.get('/api/v1/ai/analyses', params={'source_id': hw_key}).json()
+            self.assertEqual([x['id'] for x in reopened], [brief['id']])
+            self.assertEqual(reopened[0]['items'][0]['advice']['steps'], edited_brief['steps'])
+            self.assertEqual(c.get('/api/v1/ai/analyses', params={'source_id': key}).json(), [])
+            self.assertEqual(c.put('/api/v1/ai/suggestions/'+brief_item['id'], json=dict(version=1, status='accepted', advice=edited_brief)).status_code, 409)
+            self.assertEqual(len(c.get('/api/v1/bootstrap').json()['homework']), 1)
+            self.assertEqual(len(c.get('/api/v1/bootstrap').json()['followups']), 0)
             c.delete('/api/v1/homework/'+hw['id'])
+            self.assertEqual(c.get('/api/v1/ai/analyses', params={'source_id': hw_key}).status_code, 409)
             advice = dict(goal='一起阅读', steps=['让孩子选择一本书'], frequency='每天10分钟', review='一周后询问感受', source_ids=[key])
             result = ai_support.Result(facts=[dict(text='完成阅读', source_ids=[key])], strengths=[], hypotheses=[], questions=['喜欢什么书？'], suggestions=[advice]*3)
             payload = dict(**selection, preview_hash=p['hash'], request_id='test-one')
@@ -91,6 +116,7 @@ class AIFlow(unittest.TestCase):
             c.headers['Authorization'] = 'Bearer '+mt
             self.assertEqual(post('/ai/preview', selection).status_code, 403)
             self.assertEqual(post('/ai/analyses', payload).status_code, 403)
+            self.assertEqual(c.get('/api/v1/ai/analyses', params={'source_id': hw_key}).status_code, 403)
             visible = c.get('/api/v1/ai/analyses/'+a['id']).json()
             self.assertNotIn('snapshot', visible)
             self.assertNotIn('result', visible)
@@ -142,6 +168,12 @@ class AIFlow(unittest.TestCase):
                 with self.assertRaises(HTTPException) as e:
                     asyncio.run(ai_support.call_model(snapshot))
                 self.assertEqual(e.exception.status_code, 502)
+        body['suggestions'] = [{**good, 'source_ids': ['record:1']}]
+        response = httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(body)}}]})
+        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response)):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(ai_support.call_model(snapshot))
+            self.assertEqual(error.exception.status_code, 502)
 
     def test_time_window_and_size(self):
         from datetime import datetime, timezone
@@ -206,27 +238,28 @@ class AIFlow(unittest.TestCase):
             {'id': key, 'type': '家庭作业', 'subject': '数学', 'content': '理解加法应用题，先读题再画图',
              'due_label': '2026-10-22 20:00', 'support_mode': '需要提示', 'check_required': True}
         ]}
-        advice = dict(goal='理解题意', steps=['孩子先说出已知条件'], frequency='本次10分钟', review='孩子独立复述', source_ids=[key])
-        body = dict(facts=[], strengths=[], questions=['请提供具体题目'], hypotheses=[], suggestions=[advice]*3)
+        body = dict(source_id=key, content='准备：读清题目要求。\n思路：让孩子说出条件，再尝试画图。\n检查：核对条件和问题；尚缺具体题干，仅供通用参考。')
         def response():
             return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(body)}}]})
-        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())):
-            with self.assertRaises(HTTPException):
-                asyncio.run(ai_support.call_model(snapshot))
-        body['tutoring'] = dict(source_id=key, task_summary='数学应用题阅读练习，尚缺题干', objectives=['说清条件'],
-                                plan=['读题3分钟', '画图5分钟', '自查2分钟'], solution_approach=['先区分已知和所求'],
-                                parent_prompts=['题目告诉了你什么？'], self_check=['能否独立复述题意？'])
         with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())) as provider:
             result = asyncio.run(ai_support.call_model(snapshot))
-            self.assertEqual(result.tutoring.source_id, key)
+            self.assertEqual(len(result.suggestions), 1)
+            self.assertEqual(result.suggestions[0].steps, [body['content']])
+            self.assertEqual(result.suggestions[0].source_ids, [key])
+            self.assertIsNone(result.tutoring)
             self.assertEqual(provider.call_args.kwargs['json']['thinking'], {'type': 'disabled'})
             sent = provider.call_args.kwargs['json']['messages']
             self.assertIn('不得虚构题干', sent[0]['content'])
+            self.assertIn('最多500字', sent[0]['content'])
             self.assertEqual(json.loads(sent[1]['content']), snapshot)
-        body['tutoring']['source_id'] = 'homework:unrelated'
-        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())):
-            with self.assertRaises(HTTPException):
-                asyncio.run(ai_support.call_model(snapshot))
+        for invalid in [dict(source_id='homework:unrelated', content='不能引用其他安排'),
+                        dict(source_id=key, content='冗长' * 251), dict(source_id=key, content='   '),
+                        dict(source_id=key)]:
+            body = invalid
+            with self.subTest(body=invalid), patch('httpx.AsyncClient.post', AsyncMock(return_value=response())):
+                with self.assertRaises(HTTPException) as error:
+                    asyncio.run(ai_support.call_model(snapshot))
+                self.assertEqual(error.exception.status_code, 502)
 
 
 if __name__ == '__main__':

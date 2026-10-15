@@ -66,6 +66,11 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
       setSources(p.snapshot.sources); setSelected([single.key]); setContext([]); setPreview(p);
       setRequestId(newRequestId());
       const state = await request<{ enabled: boolean }>("/ai/candidates?days=7"); setEnabled(state.enabled);
+      if (singleOnly) {
+        const saved = await request<Analysis[]>(`/ai/analyses?source_id=${encodeURIComponent(single.key)}`);
+        const latest = saved.find(a => a.items.some(item => item.status === "accepted" && !item.target_id));
+        if (latest) showAnalysis(latest);
+      }
     });
   }, [single?.nonce]);
   const changeSelection = (ids: string[]) => { setSelected(ids); setPreview(null); };
@@ -87,6 +92,12 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
     });
     showAnalysis(a);
   });
+  const regenerateSingle = () => void execute(async () => {
+    if (!single) return;
+    const p = await request<Preview>("/ai/preview", json("POST", { sources: [single.key], context: [] }));
+    setPreview(p); setSelected([single.key]); setContext([]); setRequestId(newRequestId()); setMode("select");
+  });
+  const singleItem = analysis?.items.find(item => item.status === "accepted" && !item.target_id) || analysis?.items[0];
 
   if (singleOnly && mode === "closed") return null;
 
@@ -142,7 +153,12 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
     {mode === "history" && <div>{!history.length && <p>暂无可查看的建议。</p>}{history.map(a => <button key={a.id} disabled={busy} onClick={() => void execute(async () => showAnalysis(await request<Analysis>(`/ai/analyses/${a.id}`)))}>
       {new Date(a.created_at).toLocaleString("zh-CN")} · {a.items.length}条建议
     </button>)}</div>}
-    {mode === "result" && analysis && <div>
+    {singleOnly && mode === "result" && analysis && singleItem && <>
+      {analysis.changed && <p role="status">{analysis.deleted ? "原安排已删除。" : "安排已更新，可重新生成建议。"}</p>}
+      <BriefAdviceForm key={singleItem.id} item={singleItem} busy={busy} disabled={Boolean(analysis.deleted || singleItem.target_id)}
+        onSave={advice => void execute(() => review(singleItem, advice, "accepted"))} onRegenerate={regenerateSingle} />
+    </>}
+    {!singleOnly && mode === "result" && analysis && <div>
       <p className="hint">AI 生成，仅供家长参考；请结合实际观察。模型：{analysis.model}</p>
       {analysis.changed && <p role="status">资料已更新{analysis.deleted ? "或已删除，禁止转为行动。" : "，转为行动前请重新核对。"}</p>}
       {analysis.result && <>
@@ -200,6 +216,29 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
     onCancel={e => { if (busy) e.preventDefault(); }} onClose={() => setMode("closed")}>
     {content}
   </dialog> : content;
+}
+
+function BriefAdviceForm({ item, busy, disabled, onSave, onRegenerate }: {
+  item: Item; busy: boolean; disabled: boolean;
+  onSave: (advice: Advice) => void; onRegenerate: () => void;
+}) {
+  const savedContent = item.advice.steps.join("\n");
+  const [content, setContent] = useState(savedContent);
+  const saved = item.status === "accepted" && content.trim() === savedContent;
+  return <form className="ai-brief" onSubmit={e => {
+    e.preventDefault();
+    if (content.trim() && content.length <= 500) onSave({ ...item.advice, steps: [content.trim()] });
+  }}>
+    <fieldset disabled={busy || disabled}>
+      <label>辅导建议<textarea required maxLength={500} value={content} onChange={e => setContent(e.target.value)} /></label>
+      {content.length > 500 && <p role="alert">请将建议精简至500字以内再保存。</p>}
+      {saved && <p role="status">已保存</p>}
+      <div className="ai-toolbar">
+        <button disabled={saved || !content.trim() || content.length > 500}>{busy ? "正在处理…" : "确认保存"}</button>
+        <button type="button" onClick={onRegenerate}>重新生成</button>
+      </div>
+    </fieldset>
+  </form>;
 }
 
 function SourcePreview({ snapshot }: { snapshot: Preview["snapshot"] }) {
