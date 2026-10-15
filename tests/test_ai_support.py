@@ -171,6 +171,37 @@ class AIFlow(unittest.TestCase):
             response = c.post('/api/v1/ai/preview', json={'sources': ['record:boundary'], 'context': ['traits']})
             self.assertEqual(response.status_code, 422)
 
+    def test_homework_tutoring_contract(self):
+        import asyncio
+        import json
+        import httpx
+        from fastapi import HTTPException
+        key = 'homework:example'
+        snapshot = {'context': {'age': 7, 'grade': '一年级'}, 'sources': [
+            {'id': key, 'type': '家庭作业', 'subject': '数学', 'content': '理解加法应用题，先读题再画图',
+             'due_label': '2026-10-22 20:00', 'support_mode': '需要提示', 'check_required': True}
+        ]}
+        advice = dict(goal='理解题意', steps=['孩子先说出已知条件'], frequency='本次10分钟', review='孩子独立复述', source_ids=[key])
+        body = dict(facts=[], strengths=[], questions=['请提供具体题目'], hypotheses=[], suggestions=[advice]*3)
+        def response():
+            return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(body)}}]})
+        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())):
+            with self.assertRaises(HTTPException):
+                asyncio.run(ai_support.call_model(snapshot))
+        body['tutoring'] = dict(source_id=key, task_summary='数学应用题阅读练习，尚缺题干', objectives=['说清条件'],
+                                plan=['读题3分钟', '画图5分钟', '自查2分钟'], solution_approach=['先区分已知和所求'],
+                                parent_prompts=['题目告诉了你什么？'], self_check=['能否独立复述题意？'])
+        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())) as provider:
+            result = asyncio.run(ai_support.call_model(snapshot))
+            self.assertEqual(result.tutoring.source_id, key)
+            sent = provider.call_args.kwargs['json']['messages']
+            self.assertIn('不得虚构题干', sent[0]['content'])
+            self.assertEqual(json.loads(sent[1]['content']), snapshot)
+        body['tutoring']['source_id'] = 'homework:unrelated'
+        with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())):
+            with self.assertRaises(HTTPException):
+                asyncio.run(ai_support.call_model(snapshot))
+
 
 if __name__ == '__main__':
     try:

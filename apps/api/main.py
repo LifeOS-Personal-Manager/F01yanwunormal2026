@@ -170,6 +170,7 @@ class ChildUpdate(BaseModel):
 
 
 class HomeworkCreate(BaseModel):
+    attachment_ids: list[str] | None = Field(default=None, max_length=5)
     type: Literal["家庭作业", "课外项目", "其他"] = "家庭作业"
     subject: str = Field(min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=1000)
@@ -300,7 +301,7 @@ def child_out(child: ChildProfile) -> dict:
 
 
 def homework_out(item: Homework) -> dict:
-    return {"id": item.id, "type": item.type, "subject": item.subject, "content": item.content, "due_label": item.due_label, "support_mode": item.support_mode, "status": item.status, "check_required": item.check_required}
+    return {"id": item.id, "type": item.type, "subject": item.subject, "content": item.content, "due_label": item.due_label, "support_mode": item.support_mode, "status": item.status, "check_required": item.check_required, "attachments": attachment_list(item)}
 
 
 def schedule_plan_out(item: SchedulePlan) -> dict:
@@ -620,23 +621,27 @@ def update_child(payload: ChildUpdate, db: Session = Depends(get_db)) -> dict:
 
 
 @app.post("/api/v1/homework", status_code=201)
-def create_homework(payload: HomeworkCreate, db: Session = Depends(get_db)) -> dict:
-    item = Homework(id=str(uuid4()), **payload.model_dump(), status="未开始", created_at=utcnow())
-    db.add(item); db.commit(); return homework_out(item)
+def create_homework(payload: HomeworkCreate, request: Request, db: Session = Depends(get_db)) -> dict:
+    item = Homework(id=str(uuid4()), **payload.model_dump(exclude={"attachment_ids"}), status="未开始", created_at=utcnow())
+    db.add(item)
+    bind_attachments(db, item.id, payload.attachment_ids, request.state.account_id)
+    db.commit(); return homework_out(item)
 
 
 @app.put("/api/v1/homework/{item_id}")
-def edit_homework(item_id: str, payload: HomeworkCreate, db: Session = Depends(get_db)) -> dict:
-    item = db.get(Homework, item_id)
+def edit_homework(item_id: str, payload: HomeworkCreate, request: Request, db: Session = Depends(get_db)) -> dict:
+    item = db.scalar(select(Homework).where(Homework.id == item_id).with_for_update())
     if not item: raise HTTPException(404, "安排不存在")
-    for key, value in payload.model_dump().items(): setattr(item, key, value)
+    for key, value in payload.model_dump(exclude={"attachment_ids"}).items(): setattr(item, key, value)
+    bind_attachments(db, item_id, payload.attachment_ids, request.state.account_id)
     db.commit(); return homework_out(item)
 
 
 @app.delete("/api/v1/homework/{item_id}")
 def delete_homework(item_id: str, db: Session = Depends(get_db)) -> dict:
-    item = db.get(Homework, item_id)
+    item = db.scalar(select(Homework).where(Homework.id == item_id).with_for_update())
     if not item: raise HTTPException(404, "安排不存在")
+    remove_homework_attachments(db, item_id)
     db.delete(item); db.commit(); return {"deleted": item_id}
 
 
@@ -771,3 +776,10 @@ except ImportError:
     from ai_support import register_ai
 
 register_ai(app, globals())
+
+try:
+    from .attachments import register_attachments
+except ImportError:
+    from attachments import register_attachments
+
+attachment_list, bind_attachments, remove_homework_attachments = register_attachments(app, globals())

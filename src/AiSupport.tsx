@@ -6,9 +6,10 @@ type Source = { id: string; title?: string; content?: string; subject?: string; 
 type Advice = { goal: string; steps: string[]; frequency: string; review: string; source_ids: string[] };
 type Item = { id: string; advice: Advice; status: string; version: number; target_kind: string; target_id: string };
 type Fact = { text: string; source_ids: string[] };
+type TutoringPlan = { source_id: string; task_summary: string; objectives: string[]; plan: string[]; solution_approach: string[]; parent_prompts: string[]; self_check: string[] };
 type Analysis = { id: string; created_at: string; model: string; items: Item[]; changed?: boolean; deleted?: boolean; current_hash?: string;
   current_snapshot?: Preview["snapshot"];
-  snapshot?: { sources: Source[]; context: Record<string, unknown> }; result?: { facts: Fact[]; strengths: Fact[]; questions: string[]; hypotheses: Fact[] } };
+  snapshot?: { sources: Source[]; context: Record<string, unknown> }; result?: { facts: Fact[]; strengths: Fact[]; questions: string[]; hypotheses: Fact[]; tutoring?: TutoringPlan | null } };
 type Preview = { hash: string; snapshot: { sources: Source[]; context: Record<string, unknown> } };
 const subjects = ["语文", "数学", "英语", "体育", "自然", "人文", "积木", "其他"];
 const statusNames: Record<string, string> = { pending: "待审核", accepted: "已采纳", rejected: "未采纳" };
@@ -113,6 +114,14 @@ export function AiSupport({ guardian, single, onOpen }: {
       <p className="hint">AI 生成，仅供家长参考；请结合实际观察。模型：{analysis.model}</p>
       {analysis.changed && <p role="status">资料已更新{analysis.deleted ? "或已删除，禁止转为行动。" : "，转为行动前请重新核对。"}</p>}
       {analysis.result && <>
+        {analysis.result.tutoring && <section className="ai-tutoring">
+          <h3>作业辅导计划与解决思路</h3>
+          <p>{analysis.result.tutoring.task_summary}</p>
+          {([['objectives', '学习目标'], ['plan', '辅导计划'], ['solution_approach', '解决思路'], ['parent_prompts', '家长引导提问'], ['self_check', '孩子自查清单']] as const).map(([key, title]) => <section key={key}>
+            <h4>{title}</h4><ol>{analysis.result!.tutoring![key].map((line, i) => <li key={i}>{line}</li>)}</ol>
+          </section>)}
+          <p className="hint">以下建议可逐条编辑和采纳，不会自动修改作业或创建行动。</p>
+        </section>}
         {([['facts', '事实摘要'], ['strengths', '优势与进展'], ['hypotheses', '可能原因（推测，不是事实）']] as const).map(([key, title]) => <section key={key}>
           <h4>{title}</h4>{analysis.result![key].map((f, i) => <p key={i}>{f.text}<small className="ai-citations">依据：{f.source_ids.map(id => analysis.snapshot?.sources.find(s => s.id === id)?.title || analysis.snapshot?.sources.find(s => s.id === id)?.content || id).join("；")}</small></p>)}
         </section>)}

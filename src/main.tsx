@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Baby,
@@ -29,11 +29,13 @@ import {
   type Goal,
   type GrowthRecord,
   type Homework,
+  type Attachment,
   type ScheduleEntry,
   type SchedulePlan,
 } from "./api";
 import "./styles.css";
 import { AiSupport } from "./AiSupport";
+import { HomeworkAttachments } from "./HomeworkAttachments";
 
 type View =
   | "home"
@@ -452,13 +454,21 @@ function App() {
             setModal(null);
             setEditTarget(null);
           }}
-          submit={(kind, payload, id) => {
+          submit={(kind, payload, id, withAi) => {
             if (kind === "record")
               return run(
                 id
                   ? api.updateRecord(id, payload as any)
                   : api.createRecord(payload as any),
                 id ? "成长记录已更新" : "成长记录已保存",
+              );
+            if (kind === "homework" && withAi)
+              return run(
+                (id ? api.editHomework(id, payload as any) : api.createHomework(payload as any)).then((saved) => {
+                  go("learning");
+                  setAiSingle({ key: `homework:${saved.id}`, nonce: Date.now() });
+                }),
+                "安排已保存，请预览资料后生成辅导建议",
               );
             if (kind === "homework")
               return run(
@@ -985,6 +995,7 @@ function LearningPage({
       <div className="hw-content">
         <span className="tag">{x.type || "家庭作业"}</span>
         <b>{x.subject} · {x.content}</b>
+        {!!x.attachments?.length && <small>附件 {x.attachments.length} 个 · 编辑安排可查看</small>}
         <span>
           {x.due_label} · {x.support_mode}
           {x.check_required ? " · 需要检查" : ""}
@@ -1394,14 +1405,29 @@ function Editor({
   data,
   target,
   close,
-  submit,
+  submit: submitAction,
 }: {
   modal: Exclude<Modal, null>;
   data: AppData;
   target: GrowthRecord | Homework | ScheduleEntry | FollowUp | Goal | FamilyAccount | null;
   close: () => void;
-  submit: (kind: Exclude<Modal, null>, payload: unknown, id?: string) => Promise<boolean>;
+  submit: (kind: Exclude<Modal, null>, payload: unknown, id?: string, withAi?: boolean) => Promise<boolean>;
 }) {
+  const [saving, setSaving] = useState(false);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>(modal === "homework" ? (target as Homework | null)?.attachments || [] : []);
+  const [saveError, setSaveError] = useState("");
+  const saveLock = useRef(false);
+  const submit = async (kind: Exclude<Modal, null>, payload: unknown, id?: string, withAi?: boolean) => {
+    if (saveLock.current || attachmentBusy) return;
+    saveLock.current = true; setSaving(true); setSaveError("");
+    try {
+      if (!await submitAction(kind, payload, id, withAi)) setSaveError("保存失败，填写内容已保留。请检查网络或页面错误提示后重试。");
+    } catch {
+      setSaveError("保存失败，填写内容已保留，请重试。");
+    } finally { saveLock.current = false; setSaving(false); }
+  };
+  const canUseAi = data.accounts.find(x => x.id === data.current_account_id)?.role === "监护人";
   const record = modal === "record" ? (target as GrowthRecord | null) : null;
   const homework = modal === "homework" ? (target as Homework | null) : null;
   const entry = modal === "scheduleEntry" ? (target as ScheduleEntry | null) : null;
@@ -1426,7 +1452,8 @@ function Editor({
         due_label: String(f.get("due") || homework?.due_label || "").replace("T", " "),
         support_mode: f.get("support"),
         check_required: f.get("check") === "on",
-      }, target?.id);
+        attachment_ids: attachments.map(x => x.id),
+      }, target?.id, canUseAi && (e.nativeEvent as SubmitEvent).submitter?.getAttribute("data-ai") === "true");
     if (modal === "schedulePlan")
       submit(modal, {
         name: f.get("name"),
@@ -1511,11 +1538,12 @@ function Editor({
                 : titles[modal]}
             </h2>
           </div>
-          <button aria-label="关闭表单" className="icon-btn" onClick={close}>
+          <button aria-label="关闭表单" className="icon-btn" onClick={close} disabled={saving || attachmentBusy}>
             <X />
           </button>
         </div>
         <form onSubmit={send}>
+          {saveError && <p role="alert" className="ai-error">{saveError}</p>}
           {modal === "record" && (
             <>
               <Field
@@ -1568,6 +1596,7 @@ function Editor({
                 placeholder="具体要完成什么"
                 defaultValue={homework?.content}
               />
+              <HomeworkAttachments files={attachments} onChange={setAttachments} onBusy={setAttachmentBusy} disabled={saving} />
               <Field
                 name="due"
                 label="截止时间"
@@ -1584,6 +1613,14 @@ function Editor({
                 values={["自己完成", "需要提示", "需要陪伴", "需要向老师求助"]}
                 defaultValue={homework?.support_mode}
               />
+              {canUseAi && <section className="homework-ai-entry" aria-label="AI 辅导建议">
+                <strong>AI 辅导建议</strong>
+                <p>结合科目、作业内容与要求、截止时间和支持方式，梳理辅导计划、解题思路及家长引导方法。请在安排内容中写清具体题目或要求。</p>
+                <button type="submit" data-ai="true" className="btn ghost" disabled={saving || attachmentBusy}>
+                  {saving ? "正在保存…" : "保存并获取 AI 建议"}
+                </button>
+                <small>先保存本次安排，再预览并确认发送给 DeepSeek；建议由家长决定是否采纳。</small>
+              </section>}
               <label className="check-label">
                 <input type="checkbox" name="check" defaultChecked={homework?.check_required || false} />
                 完成后需要家长检查
@@ -1779,10 +1816,10 @@ function Editor({
             </>
           )}
           <div className="modal-foot">
-            <button type="button" className="btn ghost" onClick={close}>
+            <button type="button" className="btn ghost" onClick={close} disabled={saving || attachmentBusy}>
               取消
             </button>
-            <button className="btn primary" type="submit">
+            <button className="btn primary" type="submit" disabled={saving || attachmentBusy}>
               <CheckCircle2 size={17} />
               保存
             </button>

@@ -19,6 +19,7 @@ export type Child = {
   support_note: string;
 };
 export type Homework = {
+  attachments?: Attachment[];
   type: "家庭作业" | "课外项目" | "其他";
   id: string;
   subject: string;
@@ -28,6 +29,8 @@ export type Homework = {
   status: string;
   check_required: boolean;
 };
+export type Attachment = { id: string; filename: string; content_type: string; size: number; created_at: string };
+export type HomeworkPayload = Omit<Homework, "id" | "status" | "attachments"> & { attachment_ids?: string[] };
 export type SchedulePlan = {
   name: string;
   period_start: string;
@@ -84,12 +87,24 @@ export type AppData = {
 };
 const API_URL = import.meta.env.VITE_API_URL || "/api/v1";
 const TOKEN_KEY = "yanwu_family_token";
+export async function downloadAttachment(id: string): Promise<Blob> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const response = await fetch(`${API_URL}/attachments/${encodeURIComponent(id)}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  if (!response.ok) throw new Error("附件下载失败，请检查登录状态或稍后重试");
+  return response.blob();
+}
 export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!response.ok) {
+    if (path === "/attachments" && response.status === 404) {
+      throw new Error("当前后端尚未提供附件上传接口，请更新后端部署后重试；安排内容仍可正常保存。");
+    }
+    if (path === "/attachments" && response.status === 413) {
+      throw new Error("附件超过服务器上传大小限制，请缩小文件或调整服务器上传配置后重试。");
+    }
     const body = await response.json().catch(() => null);
     const detail = body?.detail;
     throw new Error(typeof detail === "string" ? detail : Array.isArray(detail) ? "请检查填写内容是否完整、长度是否超限" : `请求失败 (${response.status})`);
@@ -102,6 +117,11 @@ export const json = (method: string, body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 export const api = {
+  uploadAttachment: (file: File) => {
+    const form = new FormData(); form.append("file", file);
+    return request<Attachment>("/attachments", { method: "POST", body: form });
+  },
+  discardAttachment: (id: string) => request<{ ok: boolean }>(`/attachments/${id}`, { method: "DELETE" }),
   hasToken: () => Boolean(localStorage.getItem(TOKEN_KEY)),
   setToken: (token: string) => localStorage.setItem(TOKEN_KEY, token),
   clearToken: () => localStorage.removeItem(TOKEN_KEY),
@@ -145,9 +165,9 @@ export const api = {
   toFollowUp: (id: string) =>
     request<FollowUp>(`/records/${id}/follow-up`, { method: "POST" }),
   updateChild: (body: Child) => request<Child>("/child", json("PUT", body)),
-  createHomework: (body: Omit<Homework, "id" | "status">) =>
+  createHomework: (body: HomeworkPayload) =>
     request<Homework>("/homework", json("POST", body)),
-  editHomework: (id: string, body: Omit<Homework, "id" | "status">) =>
+  editHomework: (id: string, body: HomeworkPayload) =>
     request<Homework>(`/homework/${id}`, json("PUT", body)),
   deleteHomework: (id: string) =>
     request<{ ok: boolean }>(`/homework/${id}`, { method: "DELETE" }),
