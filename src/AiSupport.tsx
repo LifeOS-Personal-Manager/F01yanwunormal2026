@@ -36,9 +36,12 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
   const [requestId, setRequestId] = useState("");
   const [action, setAction] = useState<{ item: Item; kind: string } | null>(null);
   useEffect(() => { if (action) actionForm.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [action]);
+  useEffect(() => {
+    if (mode !== "closed") root.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [mode, single?.nonce]);
   const execute = async (fn: () => Promise<void>) => {
     setBusy(true); setError("");
-    try { await fn(); } catch (e) { setError(e instanceof TypeError ? "网络连接失败，填写内容已保留，请检查网络后重试" : e instanceof Error ? e.message : "操作失败，请重试"); }
+    try { await fn(); } catch (e) { setError(e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError") ? "AI 请求超时，资料已保留，请手动重试" : e instanceof TypeError ? "网络连接失败，填写内容已保留，请检查网络后重试" : e instanceof Error ? e.message : "操作失败，请重试"); }
     finally { setBusy(false); }
   };
   const loadCandidates = async (range: number) => {
@@ -48,8 +51,8 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
   };
   useEffect(() => {
     if (!single || !guardian || (singleOnly && !single.key.startsWith("homework:"))) return;
-    root.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     setMode("select"); setAction(null);
+    setPreview(null); setSources([]); setSelected([]); setAnalysis(null);
     void execute(async () => {
       const p = await request<Preview>("/ai/preview", json("POST", { sources: [single.key], context: [] }));
       setSources(p.snapshot.sources); setSelected([single.key]); setContext([]); setPreview(p);
@@ -105,7 +108,10 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
         <p><strong>以下内容将发送至 DeepSeek。</strong>请检查正文是否包含不希望分享的信息；可返回取消选择。</p>
         <details open><summary>资料预览</summary><SourcePreview snapshot={preview.snapshot} /></details>
         <button disabled={!enabled} onClick={() => void execute(async () => {
-          const a = await request<Analysis>("/ai/analyses", json("POST", { sources: selected, context, preview_hash: preview.hash, request_id: requestId }));
+          const a = await request<Analysis>("/ai/analyses", {
+            ...json("POST", { sources: selected, context, preview_hash: preview.hash, request_id: requestId }),
+            signal: AbortSignal.timeout(70000),
+          });
           showAnalysis(a);
         })}>确认发送并生成建议</button>
       </div>}

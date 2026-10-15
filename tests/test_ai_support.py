@@ -171,6 +171,31 @@ class AIFlow(unittest.TestCase):
             response = c.post('/api/v1/ai/preview', json={'sources': ['record:boundary'], 'context': ['traits']})
             self.assertEqual(response.status_code, 422)
 
+    def test_provider_failure_messages(self):
+        import asyncio
+        import httpx
+        from fastapi import HTTPException
+        snapshot = {'sources': [{'id': 'homework:example'}]}
+        for status, message in [(400, '请求配置'), (401, '密钥无效'), (402, '余额不足'),
+                                (403, '拒绝访问'), (404, '接口地址不存在'), (429, '过于频繁'), (500, '暂不可用')]:
+            with self.subTest(status=status), patch('httpx.AsyncClient.post', AsyncMock(return_value=httpx.Response(status))):
+                with self.assertRaises(HTTPException) as error:
+                    asyncio.run(ai_support.call_model(snapshot))
+                self.assertEqual(error.exception.status_code, 502)
+                self.assertIn(message, error.exception.detail)
+        for choice, message in [({'finish_reason': 'length', 'message': {'content': '{}'}}, '长度限制'),
+                                ({'message': {'content': None}}, '未返回有效结果')]:
+            response = httpx.Response(200, json={'choices': [choice]})
+            with patch('httpx.AsyncClient.post', AsyncMock(return_value=response)):
+                with self.assertRaises(HTTPException) as error:
+                    asyncio.run(ai_support.call_model(snapshot))
+                self.assertIn(message, error.exception.detail)
+        with patch('httpx.AsyncClient.post', AsyncMock(side_effect=httpx.ConnectError('sensitive-provider-detail'))):
+            with self.assertRaises(HTTPException) as error:
+                asyncio.run(ai_support.call_model(snapshot))
+            self.assertIn('无法连接', error.exception.detail)
+            self.assertNotIn('sensitive-provider-detail', error.exception.detail)
+
     def test_homework_tutoring_contract(self):
         import asyncio
         import json
@@ -194,6 +219,7 @@ class AIFlow(unittest.TestCase):
         with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())) as provider:
             result = asyncio.run(ai_support.call_model(snapshot))
             self.assertEqual(result.tutoring.source_id, key)
+            self.assertEqual(provider.call_args.kwargs['json']['thinking'], {'type': 'disabled'})
             sent = provider.call_args.kwargs['json']['messages']
             self.assertIn('不得虚构题干', sent[0]['content'])
             self.assertEqual(json.loads(sent[1]['content']), snapshot)

@@ -121,11 +121,25 @@ async def call_model(snapshot):
                     json={"model": os.getenv("DEEPSEEK_MODEL", "deepseek-flash"),
                           "messages": [{"role": "system", "content": prompt},
                                        {"role": "user", "content": packed(snapshot)}],
-                          "response_format": {"type": "json_object"}, "max_tokens": 6000, "stream": False},
+                          "response_format": {"type": "json_object"}, "thinking": {"type": "disabled"},
+                          "max_tokens": 6000, "stream": False},
                 )
                 if response.status_code != 200:
-                    raise HTTPException(502, "AI 服务暂不可用或额度不足，请检查配置后重试")
-                raw = response.json()["choices"][0]["message"]["content"]
+                    message = {
+                        400: "DeepSeek 请求配置无效，请检查模型名称和接口参数",
+                        401: "DeepSeek 密钥无效，请检查服务器 DEEPSEEK_API_KEY 配置",
+                        403: "DeepSeek 拒绝访问，请检查密钥和账号权限",
+                        402: "DeepSeek 账户余额不足，请充值后重试",
+                        404: "DeepSeek 模型或接口地址不存在，请检查服务器配置",
+                        429: "DeepSeek 请求过于频繁，请稍后手动重试",
+                    }.get(response.status_code, "DeepSeek 服务暂不可用，请稍后手动重试")
+                    raise HTTPException(502, message)
+                choice = response.json()["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise HTTPException(502, "AI 输出超过长度限制，请精简安排内容后手动重试")
+                raw = choice["message"]["content"]
+                if not isinstance(raw, str) or not raw.strip():
+                    raise HTTPException(502, "AI 未返回有效结果，请手动重试")
                 if len(raw) > 40000:
                     raise ValueError("oversized output")
                 result = Result.model_validate_json(raw)
@@ -142,6 +156,8 @@ async def call_model(snapshot):
         raise HTTPException(504, "AI 生成超时，选择已保留，请手动重试")
     except HTTPException:
         raise
+    except httpx.RequestError:
+        raise HTTPException(502, "服务器无法连接 DeepSeek，请检查服务器网络后重试")
     except Exception:
         raise HTTPException(502, "AI 返回内容未通过校验，请手动重试")
 

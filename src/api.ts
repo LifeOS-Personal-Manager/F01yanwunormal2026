@@ -107,6 +107,15 @@ export async function request<T>(path: string, options?: RequestInit): Promise<T
     }
     const body = await response.json().catch(() => null);
     const detail = body?.detail;
+    if (path.startsWith("/ai/") && response.status === 404 && detail === "Not Found") {
+      throw new Error("当前后端尚未部署 AI 接口，请更新后端后重试。");
+    }
+    if (path.startsWith("/ai/") && !detail && response.status === 504) {
+      throw new Error("AI 生成等待超时，资料已保留，请手动重试。");
+    }
+    if (path.startsWith("/ai/") && !detail && response.status === 502) {
+      throw new Error("AI 后端连接失败，请检查服务运行状态后重试。");
+    }
     throw new Error(typeof detail === "string" ? detail : Array.isArray(detail) ? "请检查填写内容是否完整、长度是否超限" : `请求失败 (${response.status})`);
   }
   return response.json();
