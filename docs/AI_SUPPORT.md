@@ -1,0 +1,39 @@
+# AI 梳理与人工采纳
+
+## 配置与发布
+
+服务端读取 `AI_ENABLED=true`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`（默认 https://api.deepseek.com）、`DEEPSEEK_MODEL`（默认 deepseek-flash）。未配置时生成接口返回503，原有业务不受影响。密钥只放阿里云 `/opt/yanwu/api.env`，不要发到聊天、写入前端变量或提交 Git。
+
+发布前备份数据库，安装 `apps/api/requirements.txt`；API 启动时沿用现有增量建表机制创建 `ai_analyses`、`ai_suggestions`、`ai_account_limits`，不会改写业务记录。先重启后端并检查健康接口，再发布前端 dist。关闭 AI_ENABLED 即可停止新生成，历史查看和人工审核仍可用。只回滚代码，不删除AI数据表。当前单家庭架构沿用既有账户认证，不能用于跨家庭租户隔离。
+
+真实 API 验收：在服务器安全配置密钥后，用监护人选择一条愿意发送的记录，预览、确认发送、审核、采纳，确认不自动生成业务对象；再明确确认创建行动。未完成这一步前，不应宣称真实 DeepSeek 调用已通过。
+
+## 接口
+
+- GET `/api/v1/ai/candidates?days=7|30`：北京时间自然日范围，成长记录按 occurred_at、安排按 created_at；不含课程表，每类最多展示501条，用户最多选择50条。
+- POST `/api/v1/ai/preview`：sources 为 `record:id` / `homework:id` 列表，context 为 interests/support_note/traits 任选。服务端返回实际资料 snapshot 和 hash；不允许传入伪造正文。
+- POST `/api/v1/ai/analyses`：上述选择加 preview_hash、request_id。hash变化返回409。同账号同request_id成功后返回既有结果；每账号一个生成任务，90秒租约、60秒请求总超时，每北京时间自然日最多20次尝试（失败也计入）。无自动重试。
+- GET `/api/v1/ai/analyses`、`/{id}`：历史和详情。非监护人只返回已采纳条目，不返回模型原文及来源快照。
+- PUT `/api/v1/ai/suggestions/{id}`：version、status（pending/accepted/rejected）、advice。版本冲突409；模型原文保留，人工编辑单独存储。
+- POST `/api/v1/ai/suggestions/{id}/action`：version、kind、current_hash、确认后的行动字段。仅已采纳且没有已删除来源的建议可转行动。唯一建议行的条件更新与业务创建同事务提交；重复调用返回同一关联对象。已转行动的建议不可再编辑，在目标模块修改执行内容。
+
+资料变化提示包含选中的背景资料变化；重新确认以服务端最新 hash 为准。删除源资料不删除历史快照，但阻止新建行动。所有日志仅记录状态或异常类别，不记录密钥、提示词或孩子正文。生成结果始终按纯文本呈现，不能执行模型输出的指令或 HTML。
+
+## 本地验证
+
+```powershell
+npm run build
+.\.venv\Scripts\python.exe tests/e2e_api_flow.py
+.\.venv\Scripts\python.exe tests/test_ai_support.py
+```
+
+测试使用独立临时 SQLite 与模拟模型，不访问真实 Supabase、不调用付费 API。PostgreSQL 迁移和并发验收仍需在部署环境验证。局域网预览若代理旧版线上后端，会因 AI 路由未部署而返回404；应先使用本地测试后端或完成服务端发布。
+
+## 2026-10-15 本地验收
+
+- TypeScript/Vite 构建通过；既有认证、权限、增删改查、归档、幂等回归通过。
+- AI 自动测试覆盖默认最小资料、可选背景、来源伪造、50条/20000字限制、7/30天北京时间边界、普通成员权限、编辑与原文分离、拒绝建议、版本冲突、并发转行动去重、来源变更重新确认、删除拦截、额度/在途请求、异常后租约释放、超时与错误引用校验。
+- Playwright 在独立临时数据库上走通预览、模拟生成、编辑、采纳、确认创建跟进并打开目标；阶段汇总默认选中两个模块共5条资料。360px视口未发现横向溢出，断网后保留5条选择，恢复网络后可再次预览。
+- 本地未发现 DeepSeek 密钥，真实模型质量、付费API调用、线上PostgreSQL建表及线上部署尚未验证。
+
+浏览器验收可用 `tests/ai_preview_server.py` 启动127.0.0.1:8002（临时数据库、固定模拟建议），配置独立 Vite 端口把 /api 代理到该端口。此工具仅限本地测试，不能作为生产后端。

@@ -246,7 +246,17 @@ def run_flow(base_url: str) -> None:
     }
     status, homework = request(base_url, "/homework", method="POST", token=guardian_token, body=homework_payload)
     expect(status, 201, "daily item creation")
+    assert homework["type"] == "家庭作业"
     homework_id = str(homework["id"])
+    for item_type in ("课外项目", "其他", "家庭作业"):
+        status, updated = request(base_url, f"/homework/{homework_id}", method="PUT", token=guardian_token, body={**homework_payload, "type": item_type})
+        expect(status, 200, "daily item type update")
+        assert updated["type"] == item_type
+        status, snapshot = request(base_url, "/bootstrap", token=guardian_token)
+        expect(status, 200, "daily item type readback")
+        assert next(x for x in snapshot["homework"] if x["id"] == homework_id)["type"] == item_type
+    status, _ = request(base_url, "/homework", method="POST", token=guardian_token, body={**homework_payload, "type": "未知"})
+    expect(status, 422, "daily item invalid type")
     status, _ = request(base_url, f"/homework/{homework_id}", method="PUT", token=guardian_token, body={**homework_payload, "content": "验收安排已编辑"})
     expect(status, 200, "daily item update")
     for item_status in ("进行中", "已完成", "未开始"):

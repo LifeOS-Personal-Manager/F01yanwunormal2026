@@ -19,6 +19,7 @@ export type Child = {
   support_note: string;
 };
 export type Homework = {
+  type: "家庭作业" | "课外项目" | "其他";
   id: string;
   subject: string;
   content: string;
@@ -83,18 +84,19 @@ export type AppData = {
 };
 const API_URL = import.meta.env.VITE_API_URL || "/api/v1";
 const TOKEN_KEY = "yanwu_family_token";
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+export async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const headers = new Headers(options?.headers);
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!response.ok) {
     const body = await response.json().catch(() => null);
-    throw new Error(body?.detail || `请求失败 (${response.status})`);
+    const detail = body?.detail;
+    throw new Error(typeof detail === "string" ? detail : Array.isArray(detail) ? "请检查填写内容是否完整、长度是否超限" : `请求失败 (${response.status})`);
   }
   return response.json();
 }
-const json = (method: string, body: unknown): RequestInit => ({
+export const json = (method: string, body: unknown): RequestInit => ({
   method,
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),

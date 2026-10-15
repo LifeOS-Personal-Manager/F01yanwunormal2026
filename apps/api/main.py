@@ -72,6 +72,7 @@ class Homework(Base):
     __tablename__ = "homework"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     subject: Mapped[str] = mapped_column(String(40))
+    type: Mapped[str] = mapped_column(String(20), default="家庭作业", server_default="家庭作业")
     content: Mapped[str] = mapped_column(Text)
     due_label: Mapped[str] = mapped_column(String(80))
     support_mode: Mapped[str] = mapped_column(String(40), default="自己完成")
@@ -169,6 +170,7 @@ class ChildUpdate(BaseModel):
 
 
 class HomeworkCreate(BaseModel):
+    type: Literal["家庭作业", "课外项目", "其他"] = "家庭作业"
     subject: str = Field(min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=1000)
     due_label: str = Field(min_length=1, max_length=80)
@@ -298,7 +300,7 @@ def child_out(child: ChildProfile) -> dict:
 
 
 def homework_out(item: Homework) -> dict:
-    return {"id": item.id, "subject": item.subject, "content": item.content, "due_label": item.due_label, "support_mode": item.support_mode, "status": item.status, "check_required": item.check_required}
+    return {"id": item.id, "type": item.type, "subject": item.subject, "content": item.content, "due_label": item.due_label, "support_mode": item.support_mode, "status": item.status, "check_required": item.check_required}
 
 
 def schedule_plan_out(item: SchedulePlan) -> dict:
@@ -351,6 +353,9 @@ async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
     with SessionLocal() as db:
         # Keep databases created by earlier local versions compatible in place.
+        homework_columns = {column["name"] for column in inspect(engine).get_columns("homework")}
+        if "type" not in homework_columns:
+            db.execute(text("ALTER TABLE homework ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT '家庭作业'"))
         columns = {column["name"] for column in inspect(engine).get_columns("child_profiles")}
         for name, definition in {"height": "VARCHAR(40) DEFAULT ''", "weight": "VARCHAR(40) DEFAULT ''", "traits": "TEXT DEFAULT ''", "focus_direction": "TEXT DEFAULT ''"}.items():
             if name not in columns:
@@ -758,3 +763,11 @@ def update_family(payload: FamilyUpdate, request: Request, db: Session = Depends
     family.name, family.timezone = payload.name.strip(), payload.timezone.strip()
     family.members = ",".join(x.strip() for x in payload.members if x.strip())
     db.commit(); return {"name": family.name, "timezone": family.timezone, "members": family.members.split(",")}
+
+
+try:
+    from .ai_support import register_ai
+except ImportError:
+    from ai_support import register_ai
+
+register_ai(app, globals())

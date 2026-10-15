@@ -33,6 +33,7 @@ import {
   type SchedulePlan,
 } from "./api";
 import "./styles.css";
+import { AiSupport } from "./AiSupport";
 
 type View =
   | "home"
@@ -67,7 +68,7 @@ const nav: { id: View; label: string; icon: React.ElementType }[] = [
   { id: "home", label: "总览", icon: LayoutDashboard },
   { id: "child", label: "孩子档案", icon: Baby },
   { id: "records", label: "成长记录", icon: ClipboardList },
-  { id: "learning", label: "日常安排", icon: BookOpen },
+  { id: "learning", label: "辅导支持", icon: BookOpen },
   { id: "followups", label: "共同跟进", icon: MessageCircle },
   { id: "goals", label: "成长方向", icon: Compass },
 ];
@@ -83,6 +84,7 @@ const nextFollow: Record<string, string> = {
 };
 
 function App() {
+  const [aiSingle, setAiSingle] = useState<{ key: string; nonce: number } | null>(null);
   const [view, setViewState] = useState<View>(fromPath);
   const [data, setData] = useState<AppData | null>(null);
   const [drawer, setDrawer] = useState(false);
@@ -135,6 +137,7 @@ function App() {
     };
   }, [Boolean(data)]);
   const go = (v: View) => {
+    setAiSingle(null);
     history.pushState({}, "", paths[v]);
     setViewState(v);
     setDrawer(false);
@@ -324,6 +327,18 @@ function App() {
         {view === "child" && (
           <ChildPage child={data.child} edit={() => setModal("child")} />
         )}
+        {(view === "records" || view === "learning") && <AiSupport
+          key={view}
+          guardian={canManageFamily}
+          single={aiSingle}
+          onOpen={async (kind, id) => {
+            const latest = await api.bootstrap(); setData(latest);
+            const item = kind === "homework" ? latest.homework.find(x => x.id === id) : latest.followups.find(x => x.id === id);
+            go(kind === "homework" ? "learning" : "followups");
+            if (item) edit(kind === "homework" ? "homework" : "followup", item);
+            else setError("关联行动已被删除");
+          }}
+        />}
         {view === "records" && (
           <RecordsPage
             records={data.records}
@@ -333,6 +348,7 @@ function App() {
             edit={(record) => edit("record", record)}
             remove={(record) => remove(record.title, () => api.deleteRecord(record.id))}
             convert={(r) => run(api.toFollowUp(r.id), "已转为共同跟进")}
+            ai={canManageFamily ? (r) => setAiSingle({ key: `record:${r.id}`, nonce: Date.now() }) : undefined}
           />
         )}
         {view === "learning" && (
@@ -340,6 +356,7 @@ function App() {
             plan={data.schedule_plan}
             entries={data.schedule_entries}
             items={data.homework}
+            ai={canManageFamily ? (r) => setAiSingle({ key: `homework:${r.id}`, nonce: Date.now() }) : undefined}
             add={() => create("homework")}
             editPlan={() => setModal("schedulePlan")}
             addEntry={() => create("scheduleEntry")}
@@ -604,7 +621,7 @@ function Home({
               <h3>今日重点</h3>
             </div>
             <button className="text-btn" onClick={() => go("learning")}>
-              查看日常安排 <ChevronRight size={15} />
+              查看辅导支持 <ChevronRight size={15} />
             </button>
           </div>
           {pending.slice(0, 2).map((x) => (
@@ -740,6 +757,10 @@ function Home({
 }
 
 function ChildPage({ child, edit }: { child: Child; edit: () => void }) {
+  const traits = child.traits.trim();
+  const traitsSummary = traits.startsWith("六岁到七岁身心发展参考")
+    ? "6—7岁阶段参考：情绪较强烈，自我意识突出，同伴相处中可能出现冲突；好奇心、创造力和阅读兴趣丰富，语言、计算与逻辑能力逐步发展；换牙、自理与生活习惯仍需关注。家长可通过肯定、明确规则和适度选择提供支持，并结合孩子的实际表现调整。这是年龄阶段参考，不代表孩子的个体评估。"
+    : traits.length > 180 ? `${traits.slice(0, 180).trimEnd()}…` : traits;
   return (
     <div className="content">
       <div className="profile-head">
@@ -798,8 +819,17 @@ function ChildPage({ child, edit }: { child: Child; edit: () => void }) {
             <h3>身心特征</h3>
           </div>
         </div>
-        {child.traits ? (
-          <p>{child.traits}</p>
+        {traits ? (
+          <>
+            <p>{traitsSummary}</p>
+            <details className="traits-details">
+              <summary>
+                <span className="traits-expand">展开详细内容</span>
+                <span className="traits-collapse">收起详细内容</span>
+              </summary>
+              <p>{traits}</p>
+            </details>
+          </>
         ) : (
           <p className="empty-state">尚未记录身心特征，可通过“编辑资料”补充。</p>
         )}
@@ -816,6 +846,7 @@ function RecordsPage({
   edit,
   remove,
   convert,
+  ai,
 }: {
   records: GrowthRecord[];
   filter: string;
@@ -824,6 +855,7 @@ function RecordsPage({
   edit: (r: GrowthRecord) => void;
   remove: (r: GrowthRecord) => void;
   convert: (r: GrowthRecord) => void;
+  ai?: (r: GrowthRecord) => void;
 }) {
   const list =
     filter === "全部" ? records : records.filter((x) => x.cat === filter);
@@ -860,6 +892,7 @@ function RecordsPage({
               <div className="record-footer">
                 <span>记录人：家庭成员 · 版本 {r.version}</span>
                 <div className="row-actions">
+                  {ai && <button className="text-btn" onClick={() => ai(r)}>AI 建议</button>}
                   <button className="text-btn" onClick={() => edit(r)}>
                     <Pencil size={13} /> 编辑
                   </button>
@@ -892,6 +925,7 @@ function LearningPage({
   editEntry,
   removeEntry,
   updateStatus,
+  ai,
 }: {
   plan: SchedulePlan;
   entries: ScheduleEntry[];
@@ -904,11 +938,14 @@ function LearningPage({
   editEntry: (x: ScheduleEntry) => void;
   removeEntry: (x: ScheduleEntry) => void;
   updateStatus: (x: Homework, status: string) => void;
+  ai?: (x: Homework) => void;
 }) {
   const days = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
   const rows = useMemo(() => {
     const presetKeys = [
-      ...Array.from({ length: 6 }, (_, i) => `课程表|第${i + 1}节`),
+      ...["第1节", "大课间", "第2节", "第3节", "第4节", "午休", "第5节", "体育活动", "课后服务1",
+        ...(entries.some((x) => x.category === "课程表" && x.module === "第6节") ? ["第6节"] : []),
+      ].map((module) => `课程表|${module}`),
       "饮食|早餐",
       "饮食|午餐",
       "饮食|晚餐",
@@ -946,6 +983,7 @@ function LearningPage({
         {x.status === "已完成" && <CheckCircle2 size={19} />}
       </div>
       <div className="hw-content">
+        <span className="tag">{x.type || "家庭作业"}</span>
         <b>{x.subject} · {x.content}</b>
         <span>
           {x.due_label} · {x.support_mode}
@@ -953,6 +991,7 @@ function LearningPage({
         </span>
       </div>
       <div className="row-actions">
+        {ai && <button className="text-btn" onClick={() => ai(x)}>AI 建议</button>}
         <button className="icon-action" title="编辑" aria-label="编辑" onClick={() => editItem(x)}>
           <Pencil size={15} />
         </button>
@@ -978,7 +1017,7 @@ function LearningPage({
     <div className="content">
       <PageHead
         hint="周期计划与单次事项"
-        title="日常安排"
+        title="辅导支持"
         action="新增单次安排"
         onClick={add}
       />
@@ -1021,7 +1060,7 @@ function LearningPage({
           <table className="schedule-table">
             <thead>
               <tr>
-                <th>日常安排</th>
+                <th>辅导支持</th>
                 <th>主要模块</th>
                 {days.map((d) => (
                   <th key={d}>{d}</th>
@@ -1381,9 +1420,10 @@ function Editor({
       }, target?.id);
     if (modal === "homework")
       submit(modal, {
+        type: f.get("type"),
         subject: f.get("subject"),
         content: f.get("content"),
-        due_label: f.get("due"),
+        due_label: String(f.get("due") || homework?.due_label || "").replace("T", " "),
         support_mode: f.get("support"),
         check_required: f.get("check") === "on",
       }, target?.id);
@@ -1507,7 +1547,21 @@ function Editor({
           )}
           {modal === "homework" && (
             <>
-              <Field name="subject" label="科目" placeholder="例如：数学" defaultValue={homework?.subject} />
+              <Select
+                name="type"
+                label="类型"
+                values={["家庭作业", "课外项目", "其他"]}
+                defaultValue={homework?.type || "家庭作业"}
+              />
+              <Select
+                name="subject"
+                label="科目"
+                values={[
+                  "语文", "数学", "英语", "体育", "自然", "人文", "积木", "其他",
+                  ...(homework?.subject && !["语文", "数学", "英语", "体育", "自然", "人文", "积木", "其他"].includes(homework.subject) ? [homework.subject] : []),
+                ]}
+                defaultValue={homework?.subject || "语文"}
+              />
               <Field
                 name="content"
                 label="安排内容"
@@ -1517,9 +1571,13 @@ function Editor({
               <Field
                 name="due"
                 label="截止时间"
-                placeholder="例如：明天 20:00"
-                defaultValue={homework?.due_label}
+                type="datetime-local"
+                optional={Boolean(homework?.due_label && !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(homework.due_label))}
+                defaultValue={homework?.due_label && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(homework.due_label) ? homework.due_label.replace(" ", "T") : undefined}
               />
+              {homework?.due_label && !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}$/.test(homework.due_label) && (
+                <p className="hint">原截止时间：{homework.due_label}。不选择新时间则保留原值。</p>
+              )}
               <Select
                 name="support"
                 label="支持方式"
@@ -1813,7 +1871,7 @@ function Select({
 function ScheduleEntryFields({ entry }: { entry: ScheduleEntry | null }) {
   const [category, setCategory] = useState(entry?.category || "课程表");
   const options: Record<string, string[]> = {
-    课程表: ["第1节", "第2节", "第3节", "第4节", "第5节", "第6节"],
+    课程表: ["第1节", "大课间", "第2节", "第3节", "第4节", "午休", "第5节", "体育活动", "课后服务1", "第6节"],
     饮食: ["早餐", "午餐", "晚餐"],
     运动: ["校内活动", "户外活动", "自主运动"],
     睡眠: ["午休", "夜间睡眠"],
@@ -1828,7 +1886,7 @@ function ScheduleEntryFields({ entry }: { entry: ScheduleEntry | null }) {
     <>
       <Select
         name="category"
-        label="日常安排"
+        label="辅导支持"
         values={["课程表", "饮食", "运动", "睡眠", "睡前时光", "其他"]}
         defaultValue={category}
         onChange={(event) => setCategory(event.target.value)}

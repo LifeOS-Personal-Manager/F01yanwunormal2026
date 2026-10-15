@@ -11,5 +11,6 @@ __pycache__/
 .env.*
 !.env.example
 output/playwright/
+.playwright-cli/
 
 *.tsbuildinfo
