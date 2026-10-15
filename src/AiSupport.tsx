@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { json, request } from "./api";
 import "./ai-support.css";
 
@@ -21,6 +22,7 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
   onOpen: (kind: string, id: string) => Promise<void>;
 }) {
   const root = useRef<HTMLElement>(null);
+  const dialog = useRef<HTMLDialogElement>(null);
   const actionForm = useRef<HTMLFormElement>(null);
   const [mode, setMode] = useState<"closed" | "select" | "history" | "result">("closed");
   const [days, setDays] = useState(7);
@@ -37,8 +39,14 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
   const [action, setAction] = useState<{ item: Item; kind: string } | null>(null);
   useEffect(() => { if (action) actionForm.current?.scrollIntoView({ behavior: "smooth", block: "start" }); }, [action]);
   useEffect(() => {
-    if (mode !== "closed") root.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [mode, single?.nonce]);
+    if (mode === "closed") return;
+    if (singleOnly && dialog.current) {
+      if (!dialog.current.open) dialog.current.showModal();
+      dialog.current.scrollTop = 0;
+    } else {
+      root.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [mode, single?.nonce, singleOnly]);
   const execute = async (fn: () => Promise<void>) => {
     setBusy(true); setError("");
     try { await fn(); } catch (e) { setError(e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError") ? "AI 请求超时，资料已保留，请手动重试" : e instanceof TypeError ? "网络连接失败，填写内容已保留，请检查网络后重试" : e instanceof Error ? e.message : "操作失败，请重试"); }
@@ -66,21 +74,42 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
     const a = await request<Analysis>(`/ai/suggestions/${item.id}`, json("PUT", { version: item.version, advice, status }));
     setAnalysis(a);
   };
+  const close = () => { dialog.current?.close(); setMode("closed"); };
+  const openTarget = async (kind: string, id: string) => {
+    await onOpen(kind, id);
+    if (singleOnly) close();
+  };
+  const generate = () => void execute(async () => {
+    if (!preview) return;
+    const a = await request<Analysis>("/ai/analyses", {
+      ...json("POST", { sources: selected, context, preview_hash: preview.hash, request_id: requestId }),
+      signal: AbortSignal.timeout(70000),
+    });
+    showAnalysis(a);
+  });
 
   if (singleOnly && mode === "closed") return null;
 
-  return <section ref={root} className="ai-support panel" aria-label={singleOnly ? "本次安排 AI 建议" : "AI 梳理"}>
+  const content = <section ref={root} className={`ai-support ${singleOnly ? "ai-single-support" : "panel"}`} aria-label={singleOnly ? "本次安排 AI 建议" : "AI 梳理"}>
     <div className="ai-toolbar">
       <strong>{singleOnly ? "本次安排 AI 建议" : "AI 梳理 · 家长决定是否采纳"}</strong>
       {!singleOnly && guardian && <button disabled={busy} onClick={() => { setMode("select"); void execute(() => loadCandidates(days)); }}>阶段梳理</button>}
       {!singleOnly && <button disabled={busy} onClick={() => void execute(async () => {
         setHistory(await request<Analysis[]>("/ai/analyses")); setMode("history");
       })}>建议历史</button>}
-      {mode !== "closed" && <button disabled={busy} onClick={() => setMode("closed")}>收起</button>}
+      {mode !== "closed" && (singleOnly
+        ? <button className="ai-close" type="button" aria-label="关闭 AI 建议" title="关闭" disabled={busy} onClick={close}><X size={18} /></button>
+        : <button disabled={busy} onClick={close}>收起</button>)}
     </div>
     {error && <p role="alert" className="ai-error">{error}</p>}
     {busy && <p role="status">正在处理，请稍候。生成最多等待约一分钟。</p>}
-    {mode === "select" && guardian && <fieldset disabled={busy} className="ai-fields">
+    {singleOnly && mode === "select" && guardian && <fieldset disabled={busy} className="ai-fields">
+      <p>将本次安排及年龄、年级发送至 DeepSeek。</p>
+      {preview && <details><summary>查看发送资料</summary><SourcePreview snapshot={preview.snapshot} /></details>}
+      {!enabled && <p role="status">AI 尚未启用，请检查服务器配置。</p>}
+      <button disabled={!enabled || !preview} onClick={generate}>确认生成</button>
+    </fieldset>}
+    {!singleOnly && mode === "select" && guardian && <fieldset disabled={busy} className="ai-fields">
       {!singleOnly && <><label>阶段范围<select value={days} onChange={e => { const n = Number(e.target.value); setDays(n); void execute(() => loadCandidates(n)); }}>
         <option value={7}>近7天</option><option value={30}>近30天</option>
       </select></label>
@@ -107,13 +136,7 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
       {preview && <div>
         <p><strong>以下内容将发送至 DeepSeek。</strong>请检查正文是否包含不希望分享的信息；可返回取消选择。</p>
         <details open><summary>资料预览</summary><SourcePreview snapshot={preview.snapshot} /></details>
-        <button disabled={!enabled} onClick={() => void execute(async () => {
-          const a = await request<Analysis>("/ai/analyses", {
-            ...json("POST", { sources: selected, context, preview_hash: preview.hash, request_id: requestId }),
-            signal: AbortSignal.timeout(70000),
-          });
-          showAnalysis(a);
-        })}>确认发送并生成建议</button>
+        <button disabled={!enabled} onClick={generate}>确认发送并生成建议</button>
       </div>}
     </fieldset>}
     {mode === "history" && <div>{!history.length && <p>暂无可查看的建议。</p>}{history.map(a => <button key={a.id} disabled={busy} onClick={() => void execute(async () => showAnalysis(await request<Analysis>(`/ai/analyses/${a.id}`)))}>
@@ -141,17 +164,17 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
         onAction={kind => void execute(async () => {
           const fresh = await request<Analysis>(`/ai/analyses/${analysis.id}`); setAnalysis(fresh);
           const current = fresh.items.find(x => x.id === item.id)!;
-          if (current.target_id) { await onOpen(current.target_kind, current.target_id); return; }
+          if (current.target_id) { await openTarget(current.target_kind, current.target_id); return; }
           if (fresh.deleted) throw new Error("来源已删除，请重新生成建议");
           setAction({ item: current, kind });
-        })} onOpen={() => void execute(() => onOpen(item.target_kind, item.target_id))} />)}
+        })} onOpen={() => void execute(() => openTarget(item.target_kind, item.target_id))} />)}
       {guardian && action && <form ref={actionForm} className="ai-action" onSubmit={e => {
         e.preventDefault(); const f = new FormData(e.currentTarget);
         void execute(async () => {
           const target = await request<{ kind: string; id: string }>(`/ai/suggestions/${action.item.id}/action`, json("POST", {
             ...Object.fromEntries(f), kind: action.kind, version: action.item.version, current_hash: analysis.current_hash,
           }));
-          setAnalysis(await request<Analysis>(`/ai/analyses/${analysis.id}`)); setAction(null); await onOpen(target.kind, target.id);
+          setAnalysis(await request<Analysis>(`/ai/analyses/${analysis.id}`)); setAction(null); await openTarget(target.kind, target.id);
         });
       }}>
         <h4>确认创建{action.kind === "followup" ? "共同跟进" : "辅导安排"}</h4>
@@ -173,6 +196,10 @@ export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
       {guardian && analysis.snapshot && <details><summary>生成时的资料快照</summary><SourcePreview snapshot={analysis.snapshot} /></details>}
     </div>}
   </section>;
+  return singleOnly ? <dialog ref={dialog} className="ai-dialog" aria-label="本次安排 AI 建议"
+    onCancel={e => { if (busy) e.preventDefault(); }} onClose={() => setMode("closed")}>
+    {content}
+  </dialog> : content;
 }
 
 function SourcePreview({ snapshot }: { snapshot: Preview["snapshot"] }) {
