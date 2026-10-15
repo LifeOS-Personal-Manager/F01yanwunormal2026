@@ -15,7 +15,8 @@ const subjects = ["语文", "数学", "英语", "体育", "自然", "人文", "�
 const statusNames: Record<string, string> = { pending: "待审核", accepted: "已采纳", rejected: "未采纳" };
 const newRequestId = () => Array.from(crypto.getRandomValues(new Uint32Array(4)), n => n.toString(16)).join("-");
 
-export function AiSupport({ guardian, single, onOpen }: {
+export function AiSupport({ guardian, single, onOpen, singleOnly = false }: {
+  singleOnly?: boolean;
   guardian: boolean; single: { key: string; nonce: number } | null;
   onOpen: (kind: string, id: string) => Promise<void>;
 }) {
@@ -46,7 +47,7 @@ export function AiSupport({ guardian, single, onOpen }: {
     setEnabled(data.enabled); setPreview(null); setContext([]);
   };
   useEffect(() => {
-    if (!single || !guardian) return;
+    if (!single || !guardian || (singleOnly && !single.key.startsWith("homework:"))) return;
     root.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     setMode("select"); setAction(null);
     void execute(async () => {
@@ -63,30 +64,32 @@ export function AiSupport({ guardian, single, onOpen }: {
     setAnalysis(a);
   };
 
-  return <section ref={root} className="ai-support panel" aria-label="AI 梳理">
+  if (singleOnly && mode === "closed") return null;
+
+  return <section ref={root} className="ai-support panel" aria-label={singleOnly ? "本次安排 AI 建议" : "AI 梳理"}>
     <div className="ai-toolbar">
-      <strong>AI 梳理 · 家长决定是否采纳</strong>
-      {guardian && <button disabled={busy} onClick={() => { setMode("select"); void execute(() => loadCandidates(days)); }}>阶段梳理</button>}
-      <button disabled={busy} onClick={() => void execute(async () => {
+      <strong>{singleOnly ? "本次安排 AI 建议" : "AI 梳理 · 家长决定是否采纳"}</strong>
+      {!singleOnly && guardian && <button disabled={busy} onClick={() => { setMode("select"); void execute(() => loadCandidates(days)); }}>阶段梳理</button>}
+      {!singleOnly && <button disabled={busy} onClick={() => void execute(async () => {
         setHistory(await request<Analysis[]>("/ai/analyses")); setMode("history");
-      })}>建议历史</button>
+      })}>建议历史</button>}
       {mode !== "closed" && <button disabled={busy} onClick={() => setMode("closed")}>收起</button>}
     </div>
     {error && <p role="alert" className="ai-error">{error}</p>}
     {busy && <p role="status">正在处理，请稍候。生成最多等待约一分钟。</p>}
     {mode === "select" && guardian && <fieldset disabled={busy} className="ai-fields">
-      <label>阶段范围<select value={days} onChange={e => { const n = Number(e.target.value); setDays(n); void execute(() => loadCandidates(n)); }}>
+      {!singleOnly && <><label>阶段范围<select value={days} onChange={e => { const n = Number(e.target.value); setDays(n); void execute(() => loadCandidates(n)); }}>
         <option value={7}>近7天</option><option value={30}>近30天</option>
       </select></label>
-      <p className="hint">按北京时间：成长记录按记录时间，辅导安排按创建时间筛选。课程表不参与。最多50条、20000字。</p>
+      <p className="hint">按北京时间：成长记录按记录时间，辅导安排按创建时间筛选。课程表不参与。最多50条、20000字。</p></>}
       {!enabled && <p role="status">服务器尚未启用 AI 或未配置密钥，可先预览资料。</p>}
-      <div className="ai-toolbar">
+      {!singleOnly && <div className="ai-toolbar">
         <button onClick={() => changeSelection(sources.slice(0, 50).map(x => x.id))}>选择前50条</button>
         <button onClick={() => changeSelection([])}>清空选择</button>
         <span>已选 {selected.length} 条</span>
-      </div>
+      </div>}
       <div className="ai-sources">{sources.map(s => <label className="ai-check" key={s.id}>
-        <input type="checkbox" checked={selected.includes(s.id)} onChange={e => changeSelection(e.target.checked ? [...selected, s.id] : selected.filter(x => x !== s.id))} />
+        {!singleOnly && <input type="checkbox" checked={selected.includes(s.id)} onChange={e => changeSelection(e.target.checked ? [...selected, s.id] : selected.filter(x => x !== s.id))} />}
         <span>{s.id.startsWith("record:") ? "成长记录" : "辅导安排"} · {s.title || `${s.subject}：${s.content}`}</span>
       </label>)}</div>
       {!sources.length && <p>此范围暂无资料，请扩大范围或先新增记录。</p>}

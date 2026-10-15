@@ -331,6 +331,7 @@ function App() {
         )}
         {(view === "records" || view === "learning") && <AiSupport
           key={view}
+          singleOnly={view === "learning"}
           guardian={canManageFamily}
           single={aiSingle}
           onOpen={async (kind, id) => {
