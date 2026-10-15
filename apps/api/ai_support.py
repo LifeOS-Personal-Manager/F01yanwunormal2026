@@ -100,7 +100,13 @@ async def call_model(snapshot):
     tutoring_instruction = (
         "本次只为单次安排提供一段简洁辅导建议，source_id 使用该安排ID。"
         "结合类型、科目、内容要求、截止时间、支持方式、家长检查要求以及年龄年级，"
-        "在content中用准备、思路、检查三个简短要点说明怎么辅导，建议150至250字，最多500字。"
+        "在content中按准备、思路、检查三个要点分段，建议300至450字，最多500字。"
+        "准备：点明本次要解决的具体问题、学习目标和所需材料。"
+        "思路：针对实际科目和任务选择辅导策略，写出3至4步有顺序的具体行动，"
+        "说清孩子做什么、家长如何提示；给出一句贴合任务的引导问句，"
+        "并说明卡住或出错时如何降低难度、演示类似例子或调整方法。"
+        "检查：给出1至2项可观察的完成标准及后续巩固动作。"
+        "方法要能直接照做，适量给出建议用时，避免只说鼓励、陪伴、独立尝试等泛泛原则。"
         "直接给出可执行方法，不重复安排内容，不展开事实摘要、优势、原因分析或多套方案。"
         "对课外项目给出项目拆解和实践路线，对其他安排给出相应执行思路。"
         "未提供具体题目、教材内容或评分要求时，不得虚构题干、标准答案或课程要求；"
@@ -127,7 +133,7 @@ async def call_model(snapshot):
                           "messages": [{"role": "system", "content": prompt},
                                        {"role": "user", "content": packed(snapshot)}],
                           "response_format": {"type": "json_object"}, "thinking": {"type": "disabled"},
-                          "max_tokens": 1000 if is_homework else 6000, "stream": False},
+                          "max_tokens": 1400 if is_homework else 6000, "stream": False},
                 )
                 if response.status_code != 200:
                     message = {

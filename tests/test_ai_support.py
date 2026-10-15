@@ -238,19 +238,34 @@ class AIFlow(unittest.TestCase):
             {'id': key, 'type': '家庭作业', 'subject': '数学', 'content': '理解加法应用题，先读题再画图',
              'due_label': '2026-10-22 20:00', 'support_mode': '需要提示', 'check_required': True}
         ]}
-        body = dict(source_id=key, content='准备：读清题目要求。\n思路：让孩子说出条件，再尝试画图。\n检查：核对条件和问题；尚缺具体题干，仅供通用参考。')
+        body = dict(source_id=key, content=(
+            '准备：目标是让孩子说清已知条件和所求问题，再决定怎样列式。备好题目、纸笔和可摆放的小物件；'
+            '目前没有具体题干，以下只提供通用辅导路线，不预设答案。\n'
+            '思路：1.先请孩子读题，用自己的话说出题目告诉了什么、要找什么，家长暂不讲解。'
+            '2.把已知条件画成简单示意图，让孩子对应指出图中每部分的意思，再尝试列式。'
+            '3.卡住时问“你画出的哪部分能帮助找到答案？”，一次只提示一个条件。'
+            '仍有困难时先用小物件演示同类关系，再回到原题让孩子尝试。'
+            '4.请孩子边指图边讲解列式理由，算错时先区分读题、列式还是计算环节出了问题。\n'
+            '检查：不看家长提示，孩子能复述条件并解释算式含义；用原题条件核对结果。'
+            '完成后选择一道同类练习巩固，若仍困难，记下具体卡点再请老师协助。'
+        ))
         def response():
             return httpx.Response(200, json={'choices': [{'message': {'content': json.dumps(body)}}]})
         with patch('httpx.AsyncClient.post', AsyncMock(return_value=response())) as provider:
             result = asyncio.run(ai_support.call_model(snapshot))
             self.assertEqual(len(result.suggestions), 1)
             self.assertEqual(result.suggestions[0].steps, [body['content']])
+            self.assertGreater(len(body['content']), 250)
             self.assertEqual(result.suggestions[0].source_ids, [key])
             self.assertIsNone(result.tutoring)
             self.assertEqual(provider.call_args.kwargs['json']['thinking'], {'type': 'disabled'})
             sent = provider.call_args.kwargs['json']['messages']
             self.assertIn('不得虚构题干', sent[0]['content'])
             self.assertIn('最多500字', sent[0]['content'])
+            self.assertIn('建议300至450字', sent[0]['content'])
+            self.assertIn('辅导策略', sent[0]['content'])
+            self.assertIn('具体行动', sent[0]['content'])
+            self.assertEqual(provider.call_args.kwargs['json']['max_tokens'], 1400)
             self.assertEqual(json.loads(sent[1]['content']), snapshot)
         for invalid in [dict(source_id='homework:unrelated', content='不能引用其他安排'),
                         dict(source_id=key, content='冗长' * 251), dict(source_id=key, content='   '),
